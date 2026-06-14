@@ -1,26 +1,47 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Optional, List
+from datetime import datetime
+from sqlmodel import SQLModel, Field, JSON, Relationship
 
-class ExtractedTechEntity(BaseModel):
-    tech_id: str = Field(
-        description="Canonical lowercase slug (e.g., 'fastapi', 'next.js', 'tailwindcss', 'pytorch', 'docker'). Strip action words and user/org prefixes."
-    )
-    is_valid_dev_tool: bool = Field(
-        description="True if it's an installable tool/framework/library/db. False for tutorials, broad concepts, blogs, or careers."
-    )
-    sentiment_score: int = Field(
-        description="Text sentiment rating: -5 (backlash/failure) to +5 (praise/adoption). 0 for neutral technical mentions."
-    )
-    justification: str = Field(
-        description="One-sentence logical reasoning for the extracted tech and its sentiment score."
-    )
+class HackerNewsStory(SQLModel, table=True):
+    story_id: int = Field(primary_key=True)
+    title: str
+    author: str
+    score: int
+    text: Optional[str] = None
+    url: Optional[str] = None
+    num_comments: int
+    created_at: datetime  # 🚀 Changed to datetime for time-decay calculations
+    permalink: str
+    
+    # 🚀 NEW COLUMN: Tracks point growth between pipeline syncs
+    score_growth_6h: int = Field(default=0)
 
-class GitHubValidationModel(BaseModel):
-    tech_id: str = Field(
-        description="Lowercase canonical identifier. Strip org prefix (e.g., 'tiangolo/fastapi' -> 'fastapi', 'vercel/next.js' -> 'next.js')."
-    )
-    is_valid_dev_tool: bool = Field(description="True if the repo is a functional software tool/framework, not a listicle or tutorial guide.")
-    relevance_tags: List[str] = Field(description="Architecture categorization tags (e.g., 'orm', 'state-management', 'compiler').")
+    # 🔗 FOREIGN KEY COLUMN: Links this story to a specific GitHub repository
+    # It is Optional because most HN stories do not link to a GitHub repository.
+    github_repo_name: Optional[str] = Field(default=None, foreign_key="githubrepo.repo_name")
 
-class RedditBatchResponse(BaseModel):
-    mentions: List[ExtractedTechEntity] = Field(description="List of all validated engineering entities parsed from the batch.")
+    # 🔗 RELATIONSHIP: Easily access the matching GitHubRepo instance directly from the story object
+    github_repo: Optional["GitHubRepo"] = Relationship(back_populates="stories")
+
+
+class GitHubRepo(SQLModel, table=True):
+    repo_name: str = Field(primary_key=True)
+    technology_id: str
+    owner: str
+    language: Optional[str] = None
+    description: Optional[str] = None
+    topics: Optional[List[str]] = Field(default=None, sa_type=JSON)
+    stars: int
+    forks: int
+    watchers: int
+    open_issues: int
+    created_at: str
+    updated_at: str
+    pushed_at: str
+    html_url: str
+    
+    # 🚀 Tracks stars gained in the last 24 hours
+    stars_growth_24h: int = Field(default=0)
+
+    # 🔗 RELATIONSHIP: Access a list of all HN stories discussing this repository
+    stories: List[HackerNewsStory] = Relationship(back_populates="github_repo")
