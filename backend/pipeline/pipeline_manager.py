@@ -1,86 +1,93 @@
-import json
-import datetime
+import os
+import sys
+import time
+import re
+from dotenv import load_dotenv
+from sqlmodel import select, delete
+
+# Load environment configs
+load_dotenv()
+
+# Import your pipeline modules
 from github_fetcher import fetch_and_stage_github
-from reddit_fetcher import fetch_and_stage_reddit
+from hacker_news_fetcher import fetch_and_stage_hn
+from models import GitHubRepo, HackerNewsStory
+from database import create_db_and_tables, get_session
+
+# 🚀 DEFINE NOISE SIGNATURES
+BANNED_TOPICS = {"list", "lists", "books", "resource", "resources", "awesome", "curriculum", "roadmap", "interview", "careers"}
+BANNED_DESC_KEYWORDS = ["awesome list", "curated list", "collection of", "list of free", "curriculum"]
+
+def is_noisy_repository(repo: GitHubRepo) -> bool:
+    """Evaluates if a repository is a static resource or link aggregator."""
+    repo_topics = [topic.lower() for topic in (repo.topics or [])]
+    if any(banned in repo_topics for banned in BANNED_TOPICS):
+        return True
+    description = (repo.description or "").lower()
+    if any(keyword in description for keyword in BANNED_DESC_KEYWORDS):
+        return True
+    return False
 
 def run_pipeline():
-    print("=================================================================")
-    print("🚀 INITIALIZING ADVANCED REAL-TIME TREND INTELLIGENCE SYSTEM")
-    print("=================================================================\n")
-    
-    # 1. Gather rich live metadata streams from GitHub
-    github_snapshot = fetch_and_stage_github()
-    
-    # =================================================================
-    # STRATEGY A: HOT-RELOAD CACHE ACTIVATION
-    # Take live keys discovered by GitHub and append them to our local cache
-    # before running Reddit so that Reddit can immediately utilize them.
-    # =================================================================
+    print(f"\nRefreshing Trending Snapshots: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    create_db_and_tables()
+    session_generator = get_session()
+    session = next(session_generator)
+
     try:
-        try:
-            with open("vocabulary_cache.txt", "r") as cache_file:
-                existing_vocab = set(cache_file.read().splitlines())
-        except FileNotFoundError:
-            existing_vocab = set()
+        # Fetch fresh, currently trending data
+        github_data = fetch_and_stage_github()
+        hn_data = fetch_and_stage_hn()
 
-        new_github_keys = set(github_snapshot.keys())
-        updated_vocab = existing_vocab.union(new_github_keys)
+        # 1. Wipe old records (Drop-and-Replace)
+        session.exec(delete(GitHubRepo))
+        session.exec(delete(HackerNewsStory))
+        session.flush()
 
-        with open("vocabulary_cache.txt", "w") as cache_file:
-            for word in updated_vocab:
-                if word.strip():
-                    cache_file.write(f"{word.strip()}\n")
-        print(f"[Strategy A] Vocabulary cache hot-reloaded! Total tracked tools: {len(updated_vocab)}")
-    except Exception as cache_err:
-        print(f"Failed to update vocabulary cache: {cache_err}")
-
-    # 2. Now execute Reddit fetcher equipped with updated dynamic tokens
-    reddit_snapshot = fetch_and_stage_reddit()
-    
-    # 3. Stage snapshots locally to maintain state resilience
-    with open("staged_github.json", "w") as f:
-        json.dump(github_snapshot, f, indent=4)
-    with open("staged_reddit.json", "w") as f:
-        json.dump(reddit_snapshot, f, indent=4)
-
-    # 4. Handle Dynamic Discoveries using unified master key mapping
-    merged_intelligence = {}
-    master_keys = set(list(github_snapshot.keys()) + list(reddit_snapshot.keys()))
-    
-    current_sync_time = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    
-    for tech in master_keys:
-        git = github_snapshot.get(tech, {"repo_name": "N/A", "stars": 0, "forks": 0, "last_pushed_utc": None, "tags": []})
-        red = reddit_snapshot.get(tech, {"mentions_count": 0, "cumulative_sentiment": 0, "engagement_score": 0, "latest_activity_utc": None})
+        # 2. Insert clean GitHub repos
+        clean_repos = []
+        for repo in github_data:
+            if is_noisy_repository(repo):
+                continue
+            session.add(repo)
+            clean_repos.append(repo)
         
-        # Calculate standard average sentiment score to avoid division errors
-        total_mentions = red["mentions_count"]
-        avg_sentiment = round(red["cumulative_sentiment"] / total_mentions, 2) if total_mentions > 0 else 0.0
-        
-        merged_intelligence[tech] = {
-            "technology_id": tech,
-            "github": {
-                "repository": git["repo_name"],
-                "stars_volume": git["stars"],
-                "forks_volume": git["forks"],
-                "upstream_pushed_utc": git["last_pushed_utc"],
-                "architecture_tags": git.get("tags", [])
-            },
-            "reddit": {
-                "raw_mentions_volume": total_mentions,
-                "calculated_avg_sentiment": avg_sentiment,
-                "engagement_upvotes": red["engagement_score"],
-                "upstream_activity_utc": red["latest_activity_utc"]
-            },
-            "system_pipeline_sync_utc": current_sync_time
-        }
-        
-    print("\n=================================================================")
-    print("📊 UNIFIED CORE METRICS INGESTION PAYLOAD GENERATED")
-    print("=================================================================")
-    print(json.dumps(merged_intelligence, indent=4))
-    
-    return merged_intelligence
+        session.flush()
+
+        # 3. Insert HN stories with smart linking
+        for story in hn_data:
+            linked_repo_name = None
+            story_title_lower = story.title.lower()
+
+            # Layer 1: Strict URL matching
+            if story.url and "github.com" in story.url:
+                match = re.search(r"github\.com/([^/]+/[^/]+)", story.url)
+                if match:
+                    potential_name = match.group(1).lower()
+                    if any(r.repo_name == potential_name for r in clean_repos):
+                        linked_repo_name = potential_name
+
+            # Layer 2: Contextual Name-Drop matching
+            if not linked_repo_name:
+                for repo in clean_repos:
+                    short_name = repo.repo_name.split('/')[-1].lower()
+                    if len(short_name) > 3 and short_name in story_title_lower:
+                        linked_repo_name = repo.repo_name
+                        break
+
+            story.github_repo_name = linked_repo_name
+            session.add(story)
+
+        session.commit()
+        print("[Database] Snapshot completely updated.")
+
+    except Exception as e:
+        session.rollback()
+        print(f"\n[Database Error] Sync failed: {e}")
+    finally:
+        session.close()
 
 if __name__ == "__main__":
+    # 🚀 Run exactly once and exit. No while loops.
     run_pipeline()
