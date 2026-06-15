@@ -18,7 +18,7 @@ def fetch_and_stage_reddit(limit=10):
             res = requests.get(
                 f"https://www.reddit.com/r/{subreddit}/hot.rss?limit={limit}",
                 headers={"User-Agent": "trend-intel/1.0"},
-                timeout=10
+                timeout=10,
             )
             res.raise_for_status()
             root = ET.fromstring(res.content)
@@ -39,16 +39,18 @@ def fetch_and_stage_reddit(limit=10):
                 except Exception:
                     created_at = datetime.now(tz=timezone.utc)
 
-                posts.append(RedditPost(
-                    post_id=post_id,
-                    title=title,
-                    url=url,
-                    score=0,
-                    subreddit=subreddit,
-                    num_comments=0,
-                    permalink=url,
-                    created_at=created_at
-                ))
+                posts.append(
+                    RedditPost(
+                        post_id=post_id,
+                        title=title,
+                        url=url,
+                        score=0,
+                        subreddit=subreddit,
+                        num_comments=0,
+                        permalink=url,
+                        created_at=created_at,
+                    )
+                )
         except Exception as e:
             print(f"[Reddit Pipeline] Error fetching r/{subreddit}: {e}")
             continue

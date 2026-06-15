@@ -2,6 +2,7 @@ from typing import Optional, List
 from datetime import datetime
 from sqlmodel import SQLModel, Field, JSON, Relationship
 
+
 class HackerNewsStory(SQLModel, table=True):
     story_id: int = Field(primary_key=True)
     title: str
@@ -13,7 +14,9 @@ class HackerNewsStory(SQLModel, table=True):
     created_at: datetime
     permalink: str
     score_growth_6h: int = Field(default=0)
-    github_repo_name: Optional[str] = Field(default=None, foreign_key="githubrepo.repo_name")
+    github_repo_name: Optional[str] = Field(
+        default=None, foreign_key="githubrepo.repo_name"
+    )
     github_repo: Optional["GitHubRepo"] = Relationship(back_populates="stories")
 
 
@@ -33,6 +36,7 @@ class GitHubRepo(SQLModel, table=True):
     pushed_at: str
     html_url: str
     stars_growth_24h: int = Field(default=0)
+    trend_score: float = Field(default=0.0)
     stories: List[HackerNewsStory] = Relationship(back_populates="github_repo")
 
 
