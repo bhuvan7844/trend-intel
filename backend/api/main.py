@@ -10,14 +10,13 @@ from google import genai
 # Resolve paths
 API_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = API_DIR.parent
-ROOT_DIR = BACKEND_DIR.parent
-sys.path.append(str(ROOT_DIR))
+sys.path.append(str(BACKEND_DIR))
 
 # Load .env file
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(BACKEND_DIR / ".env")
 
-from backend.pipeline.database import engine
-from backend.pipeline.models import GitHubRepo, HackerNewsStory
+from pipeline.database import engine
+from pipeline.models import GitHubRepo, HackerNewsStory, RedditPost
 
 # Initialize Gemini Client
 try:
@@ -39,6 +38,18 @@ def get_db_session():
     with Session(engine) as session:
         yield session
 
+@app.get("/trends/scored", response_model=List[GitHubRepo])
+def get_scored_trends(
+    limit: int = 20,
+    db: Session = Depends(get_db_session)
+):
+    """Returns repos ranked by composite trend_score (stars + HN + Reddit signals)."""
+    statement = select(GitHubRepo).where(
+        and_(GitHubRepo.language.is_not(None), not_(GitHubRepo.language == "Markdown"))
+    ).order_by(GitHubRepo.trend_score.desc()).limit(limit)
+    return db.exec(statement).all()
+
+
 @app.get("/trends/github", response_model=List[GitHubRepo])
 def get_github_trends(
     limit: int = 10, 
@@ -58,6 +69,20 @@ def get_github_trends(
         
     statement = statement.order_by(GitHubRepo.stars_growth_24h.desc()).limit(limit)
     return db.exec(statement).all()
+
+@app.get("/trends/reddit", response_model=List[RedditPost])
+def get_reddit_trends(
+    limit: int = 20,
+    subreddit: Optional[str] = Query(None, description="Filter by subreddit name"),
+    db: Session = Depends(get_db_session)
+):
+    """Retrieves Reddit posts sorted by score."""
+    statement = select(RedditPost)
+    if subreddit:
+        statement = statement.where(RedditPost.subreddit.ilike(subreddit))
+    statement = statement.order_by(RedditPost.score.desc()).limit(limit)
+    return db.exec(statement).all()
+
 
 @app.get("/trends/hn", response_model=List[HackerNewsStory])
 def get_hacker_news_trends(limit: int = 10, db: Session = Depends(get_db_session)):

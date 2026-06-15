@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import requests
-from models import HackerNewsStory
+from .models import HackerNewsStory
 
 TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{}.json"

@@ -10,17 +10,10 @@ class HackerNewsStory(SQLModel, table=True):
     text: Optional[str] = None
     url: Optional[str] = None
     num_comments: int
-    created_at: datetime  # 🚀 Changed to datetime for time-decay calculations
+    created_at: datetime
     permalink: str
-    
-    # 🚀 NEW COLUMN: Tracks point growth between pipeline syncs
     score_growth_6h: int = Field(default=0)
-
-    # 🔗 FOREIGN KEY COLUMN: Links this story to a specific GitHub repository
-    # It is Optional because most HN stories do not link to a GitHub repository.
     github_repo_name: Optional[str] = Field(default=None, foreign_key="githubrepo.repo_name")
-
-    # 🔗 RELATIONSHIP: Easily access the matching GitHubRepo instance directly from the story object
     github_repo: Optional["GitHubRepo"] = Relationship(back_populates="stories")
 
 
@@ -39,9 +32,17 @@ class GitHubRepo(SQLModel, table=True):
     updated_at: str
     pushed_at: str
     html_url: str
-    
-    # 🚀 Tracks stars gained in the last 24 hours
     stars_growth_24h: int = Field(default=0)
-
-    # 🔗 RELATIONSHIP: Access a list of all HN stories discussing this repository
     stories: List[HackerNewsStory] = Relationship(back_populates="github_repo")
+
+
+class RedditPost(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: str = Field(unique=True)
+    title: str
+    url: str
+    score: int
+    subreddit: str
+    num_comments: int
+    permalink: str
+    created_at: datetime

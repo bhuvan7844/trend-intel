@@ -9,10 +9,11 @@ from sqlmodel import select, delete
 load_dotenv()
 
 # Import your pipeline modules
-from github_fetcher import fetch_and_stage_github
-from hacker_news_fetcher import fetch_and_stage_hn
-from models import GitHubRepo, HackerNewsStory
-from database import create_db_and_tables, get_session
+from .github_fetcher import fetch_and_stage_github
+from .hacker_news_fetcher import fetch_and_stage_hn
+from .reddit_fetcher import fetch_and_stage_reddit
+from .models import GitHubRepo, HackerNewsStory, RedditPost
+from .database import create_db_and_tables, get_session
 
 # 🚀 DEFINE NOISE SIGNATURES
 BANNED_TOPICS = {"list", "lists", "books", "resource", "resources", "awesome", "curriculum", "roadmap", "interview", "careers"}
@@ -39,10 +40,12 @@ def run_pipeline():
         # Fetch fresh, currently trending data
         github_data = fetch_and_stage_github()
         hn_data = fetch_and_stage_hn()
+        reddit_data = fetch_and_stage_reddit()
 
         # 1. Wipe old records (Drop-and-Replace)
         session.exec(delete(GitHubRepo))
         session.exec(delete(HackerNewsStory))
+        session.exec(delete(RedditPost))
         session.flush()
 
         # 2. Insert clean GitHub repos
@@ -78,6 +81,34 @@ def run_pipeline():
 
             story.github_repo_name = linked_repo_name
             session.add(story)
+
+        # 4. Insert Reddit posts
+        for post in reddit_data:
+            session.add(post)
+
+        session.flush()
+
+        # 5. Compute trend_score for each repo
+        all_reddit_titles = " ".join(p.title.lower() for p in reddit_data)
+        for repo in clean_repos:
+            short_name = repo.repo_name.split('/')[-1].lower()
+            language = (repo.language or "").lower()
+
+            # Base: normalised star count (log scale)
+            import math
+            star_score = math.log1p(repo.stars) * 10
+
+            # HN signal: 50 pts per linked story
+            hn_score = sum(50 for s in hn_data if s.github_repo_name == repo.repo_name)
+
+            # Reddit signal: 30 pts per post mentioning repo name or language
+            reddit_score = sum(
+                30 for p in reddit_data
+                if (len(short_name) > 3 and short_name in p.title.lower())
+                or (len(language) > 1 and language in p.title.lower())
+            )
+
+            repo.trend_score = round(star_score + hn_score + reddit_score, 2)
 
         session.commit()
         print("[Database] Snapshot completely updated.")

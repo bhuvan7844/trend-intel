@@ -2,7 +2,7 @@ import os
 import time
 import requests
 from datetime import datetime, timedelta
-from models import GitHubRepo
+from .models import GitHubRepo
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 BASE_URL = "https://api.github.com/search/repositories"
