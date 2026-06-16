@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 import requests
-from models import HackerNewsStory
+from .models import HackerNewsStory
 
 TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json"
 ITEM_URL = "https://hacker-news.firebaseio.com/v0/item/{}.json"
+
 
 def fetch_and_stage_hn(limit=10):
     print("[Hacker News Pipeline] Fetching trending stories...")
@@ -27,7 +28,7 @@ def fetch_and_stage_hn(limit=10):
                 if item and item.get("type") == "story":
                     # 🚀 Pass the datetime object directly to the model
                     created_dt = datetime.fromtimestamp(item["time"], tz=timezone.utc)
-                    
+
                     hn_stories.append(
                         HackerNewsStory(
                             story_id=item["id"],
@@ -37,9 +38,9 @@ def fetch_and_stage_hn(limit=10):
                             text=item.get("text"),
                             url=item.get("url"),
                             num_comments=item.get("descendants", 0),
-                            created_at=created_dt, # Correct type for SQLModel
+                            created_at=created_dt,  # Correct type for SQLModel
                             permalink=f"https://news.ycombinator.com/item?id={item['id']}",
-                            score_growth_6h=0  # Initialized to 0
+                            score_growth_6h=0,  # Initialized to 0
                         )
                     )
             except requests.exceptions.RequestException:
