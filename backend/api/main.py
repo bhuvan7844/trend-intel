@@ -1,34 +1,48 @@
-from pathlib import Path
 import sys
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, Depends, Query, HTTPException
-from sqlmodel import Session, select, and_, not_
+from sqlmodel import Session, select
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
+from google.genai.errors import APIError
 
-# Resolve paths
-API_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = API_DIR.parent
-sys.path.append(str(BACKEND_DIR))
+BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.append(str(BACKEND_ROOT))
 
-# Load .env file
-load_dotenv(BACKEND_DIR / ".env")
+env_path = BACKEND_ROOT / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
 
-from pipeline.database import engine  # noqa: E402
-from pipeline.models import GitHubRepo, HackerNewsStory, RedditPost  # noqa: E402
+from pipeline.database import engine, create_db_and_tables  # noqa: E402
+from pipeline.models import Repo, HNStory, DevArticle, Mention, Topic  # noqa: E402
+from pipeline.pipeline_manager import run_pipeline  # noqa: E402
+from pipeline.scheduler import start_scheduler  # noqa: E402
 
-# Initialize Gemini Client
 try:
     ai_client = genai.Client()
 except Exception as e:
     ai_client = None
-    print(f"Error initializing Gemini: {e}")
+    print(f"[Warning] Gemini init failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_db_and_tables()
+    run_pipeline()
+    scheduler = start_scheduler()
+    yield
+    scheduler.shutdown()
+
 
 app = FastAPI(
     title="Developer Trend Intelligence API",
-    description="API endpoints serving trending GitHub repositories and HN stories with cross-platform signal linking.",
-    version="1.6.0",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -36,181 +50,166 @@ class ChatRequest(BaseModel):
     query: str
 
 
-def get_db_session():
+def get_db():
     with Session(engine) as session:
         yield session
 
 
-@app.get("/trends/scored", response_model=List[GitHubRepo])
-def get_scored_trends(limit: int = 20, db: Session = Depends(get_db_session)):
-    """Returns repos ranked by composite trend_score (stars + HN + Reddit signals)."""
-    statement = (
-        select(GitHubRepo)
-        .where(
-            and_(
-                GitHubRepo.language.is_not(None),
-                not_(GitHubRepo.language == "Markdown"),
-            )
-        )
-        .order_by(GitHubRepo.trend_score.desc())
-        .limit(limit)
-    )
-    return db.exec(statement).all()
-
-
-@app.get("/trends/github", response_model=List[GitHubRepo])
-def get_github_trends(
-    limit: int = 10,
-    trending_on_hn: bool = Query(
-        False, description="Only show repos explicitly discussed on HN"
-    ),
-    db: Session = Depends(get_db_session),
-):
-    """Retrieves repos sorted by 24h star growth. Optional: Filter by explicit HN linkage."""
-    statement = select(GitHubRepo).where(
-        and_(GitHubRepo.language.is_not(None), not_(GitHubRepo.language == "Markdown"))
-    )
-
-    if trending_on_hn:
-        statement = statement.join(GitHubRepo.stories).distinct()
-
-    statement = statement.order_by(GitHubRepo.stars_growth_24h.desc()).limit(limit)
-    return db.exec(statement).all()
-
-
-@app.get("/trends/reddit", response_model=List[RedditPost])
-def get_reddit_trends(
+# ── Trending repos ranked by score ──────────────────────────────────────────
+@app.get("/trending", response_model=List[Repo])
+def get_trending(
     limit: int = 20,
-    subreddit: Optional[str] = Query(None, description="Filter by subreddit name"),
-    db: Session = Depends(get_db_session),
+    language: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
 ):
-    """Retrieves Reddit posts sorted by score."""
-    statement = select(RedditPost)
-    if subreddit:
-        statement = statement.where(RedditPost.subreddit.ilike(subreddit))
-    statement = statement.order_by(RedditPost.score.desc()).limit(limit)
+    statement = select(Repo)
+    if language:
+        statement = statement.where(Repo.language.ilike(language))
+    statement = statement.order_by(Repo.trending_score.desc()).limit(limit)
     return db.exec(statement).all()
 
 
-@app.get("/trends/hn", response_model=List[HackerNewsStory])
-def get_hacker_news_trends(limit: int = 10, db: Session = Depends(get_db_session)):
-    """Retrieves HN stories sorted by 6h score growth velocity."""
-    statement = (
-        select(HackerNewsStory)
-        .order_by(HackerNewsStory.score_growth_6h.desc())
-        .limit(limit)
-    )
+# ── HN stories ──────────────────────────────────────────────────────────────
+@app.get("/trends/hn", response_model=List[HNStory])
+def get_hn_trends(limit: int = 20, db: Session = Depends(get_db)):
+    return db.exec(
+        select(HNStory).order_by(HNStory.points.desc()).limit(limit)
+    ).all()
+
+
+# ── DEV.to articles ──────────────────────────────────────────────────────────
+@app.get("/trends/devto", response_model=List[DevArticle])
+def get_devto_trends(
+    limit: int = 20,
+    tag: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    statement = select(DevArticle)
+    if tag:
+        statement = statement.where(DevArticle.tags.like(f"%{tag.lower()}%"))
+    statement = statement.order_by(DevArticle.reactions.desc()).limit(limit)
     return db.exec(statement).all()
 
 
-@app.get("/api/repositories/{repo_name}/contextual-trends")
-def get_repository_contextual_trends(
-    repo_name: str, db: Session = Depends(get_db_session)
+# ── Repo search ──────────────────────────────────────────────────────────────
+@app.get("/search", response_model=List[Repo])
+def search_repos(
+    q: str = Query(..., min_length=2),
+    db: Session = Depends(get_db),
 ):
-    """
-    🚀 STRATEGY 2 FALLBACK ENDPOINT:
-    Fetches direct links for a repository. If none exist, falls back to matching
-    Hacker News stories discussing the repository's programming language.
-    """
-    # SQLite parameters are path-friendly, but we match lower for safety
-    normalized_name = repo_name.lower()
-    statement = select(GitHubRepo).where(GitHubRepo.repo_name == normalized_name)
-    repo = db.exec(statement).first()
+    return db.exec(
+        select(Repo)
+        .where(Repo.name.ilike(f"%{q}%"))
+        .order_by(Repo.trending_score.desc())
+        .limit(20)
+    ).all()
 
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
 
-    # Layer 1: Check for explicit, hard relationships
-    direct_stories = repo.stories
-    if direct_stories:
-        return {
-            "repo_name": repo.repo_name,
-            "match_type": "direct",
-            "stories": direct_stories,
-        }
+# ── Analytics ────────────────────────────────────────────────────────────────
+@app.get("/analytics")
+def get_analytics(db: Session = Depends(get_db)):
+    repos = db.exec(select(Repo)).all()
+    mentions = db.exec(select(Mention)).all()
+    topics = db.exec(select(Topic).order_by(Topic.weekly_count.desc()).limit(20)).all()
 
-    # Layer 2: Fall back to matching macro-trends via programming language
-    fallback_stories = []
-    if repo.language:
-        hn_statement = (
-            select(HackerNewsStory)
-            .where(HackerNewsStory.title.ilike(f"%{repo.language}%"))
-            .order_by(HackerNewsStory.score_growth_6h.desc())
-            .limit(5)
-        )
-        fallback_stories = db.exec(hn_statement).all()
+    # Source breakdown
+    hn_mentions = [m for m in mentions if m.source == "hn"]
+    dev_mentions = [m for m in mentions if m.source == "devto"]
+
+    # Language distribution across all repos
+    lang_counts: dict = defaultdict(int)
+    for r in repos:
+        if r.language:
+            lang_counts[r.language] += 1
+    top_languages = sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # Repos added per day (last 7 days)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
+    daily_counts: dict = defaultdict(int)
+    for r in repos:
+        first_seen = r.first_seen_at
+        if first_seen.tzinfo is None:
+            first_seen = first_seen.replace(tzinfo=timezone.utc)
+        if first_seen >= cutoff:
+            day = first_seen.strftime("%Y-%m-%d")
+            daily_counts[day] += 1
+
+    # Most mentioned repos
+    repo_mention_counts: dict = defaultdict(int)
+    for m in mentions:
+        repo_mention_counts[m.repo_id] += 1
+    top_mentioned_ids = sorted(repo_mention_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_mentioned = []
+    for repo_id, count in top_mentioned_ids:
+        repo = db.get(Repo, repo_id)
+        if repo:
+            top_mentioned.append({"repo": repo.name, "mentions": count, "score": repo.trending_score})
 
     return {
-        "repo_name": repo.repo_name,
-        "match_type": "macro_ecosystem",
-        "matched_language": repo.language,
-        "stories": fallback_stories,
+        "summary": {
+            "total_repos": len(repos),
+            "total_mentions": len(mentions),
+            "hn_mentions": len(hn_mentions),
+            "devto_mentions": len(dev_mentions),
+            "total_topics": len(topics),
+        },
+        "top_languages": [
+            {"language": lang, "repo_count": count} for lang, count in top_languages
+        ],
+        "repos_added_last_7_days": [
+            {"date": day, "count": count}
+            for day, count in sorted(daily_counts.items())
+        ],
+        "most_mentioned_repos": top_mentioned,
+        "top_topics": [
+            {"name": t.name, "weekly_count": t.weekly_count, "total_count": t.total_count}
+            for t in topics
+        ],
+        "source_breakdown": {
+            "hn": {
+                "stories_fetched": len(db.exec(select(HNStory)).all()),
+                "mentions_created": len(hn_mentions),
+                "avg_score": round(sum(m.score for m in hn_mentions) / len(hn_mentions), 1) if hn_mentions else 0,
+            },
+            "devto": {
+                "articles_fetched": len(db.exec(select(DevArticle)).all()),
+                "mentions_created": len(dev_mentions),
+                "avg_score": round(sum(m.score for m in dev_mentions) / len(dev_mentions), 1) if dev_mentions else 0,
+            },
+        },
     }
 
 
-@app.get("/api/debug/links")
-def debug_links(db: Session = Depends(get_db_session)):
-    """Returns a list of all HN stories with an assigned hard link to a GitHub repository."""
-    statement = select(HackerNewsStory).where(
-        HackerNewsStory.github_repo_name.is_not(None)
-    )
-    results = db.exec(statement).all()
-    return [{"story": s.title, "linked_repo": s.github_repo_name} for s in results]
-
-
+# ── Gemini AI chat ────────────────────────────────────────────────────────────
 @app.post("/api/chat")
-def analyze_trends_with_ai(request: ChatRequest, db: Session = Depends(get_db_session)):
+async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if not ai_client:
         raise HTTPException(status_code=500, detail="Gemini client not configured.")
 
-    # 1. Fetch general trends
     repos = db.exec(
-        select(GitHubRepo).order_by(GitHubRepo.stars_growth_24h.desc()).limit(10)
+        select(Repo).order_by(Repo.trending_score.desc()).limit(10)
     ).all()
-    stories = db.exec(
-        select(HackerNewsStory)
-        .order_by(HackerNewsStory.score_growth_6h.desc())
-        .limit(10)
+    hn_stories = db.exec(
+        select(HNStory).order_by(HNStory.points.desc()).limit(10)
     ).all()
-
-    # 2. Fetch direct explicit cross-references
-    linked_data = db.exec(
-        select(HackerNewsStory, GitHubRepo).join(
-            GitHubRepo, HackerNewsStory.github_repo_name == GitHubRepo.repo_name
-        )
+    dev_articles = db.exec(
+        select(DevArticle).order_by(DevArticle.reactions.desc()).limit(10)
     ).all()
-
-    # 3. Calculate dynamic macro-trends to feed the AI context pool
-    unique_languages = {r.language for r in repos if r.language}
-    macro_trends_summary = []
-
-    for lang in unique_languages:
-        # In-memory evaluation of matching topics to keep pipeline lightning fast
-        matching_hn = [s.title for s in stories if lang.lower() in s.title.lower()]
-        if matching_hn:
-            macro_trends_summary.append(
-                f"Language Ecosystem '{lang}' is hot on HN with discussions like: {matching_hn}"
-            )
-
-    # 4. Construct layered architectural context
-    linked_info = [
-        f"'{item[1].repo_name}' is explicitly mentioned in '{item[0].title}'"
-        for item in linked_data
-    ]
 
     context = (
-        "Trend Analysis Data System:\n"
-        f"1. Verified Direct Matches: {', '.join(linked_info) if linked_info else 'None currently'}\n"
-        f"2. Broad Macro-Ecosystem Signals: {'; '.join(macro_trends_summary) if macro_trends_summary else 'No shared technology topics today'}\n"
-        f"3. Top Trending GitHub Repos: {[f'{r.repo_name} ({r.language})' for r in repos]}\n"
-        f"4. Top Trending HN Stories: {[s.title for s in stories]}"
+        "Developer Trend Intelligence Data:\n"
+        f"Top Repos: {[f'{r.name} ({r.language}, score={r.trending_score})' for r in repos]}\n"
+        f"Top HN Stories: {[f'{s.title} ({s.points}pts)' for s in hn_stories]}\n"
+        f"Top DEV.to Articles: {[f'{a.title} ({a.reactions} reactions)' for a in dev_articles]}"
     )
 
     try:
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"{context}\n\nUser Question: {request.query}",
+            contents=f"{context}\n\nQuestion: {request.query}",
         )
         return {"query": request.query, "analysis": response.text}
+    except APIError as e:
+        raise HTTPException(status_code=400, detail=f"Gemini error: {e.message}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

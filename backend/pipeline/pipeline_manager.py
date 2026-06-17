@@ -1,141 +1,200 @@
 import math
-import re
 import time
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
-from sqlmodel import delete
+from sqlmodel import Session, select, delete
 
-# Load environment configs
 load_dotenv()
 
-# Import your pipeline modules
-from .github_fetcher import fetch_and_stage_github  # noqa: E402
-from .hacker_news_fetcher import fetch_and_stage_hn  # noqa: E402
-from .reddit_fetcher import fetch_and_stage_reddit  # noqa: E402
-from .models import GitHubRepo, HackerNewsStory, RedditPost  # noqa: E402
-from .database import create_db_and_tables, get_session  # noqa: E402
+from .github_fetcher import fetch_github_repos  # noqa: E402
+from .hacker_news_fetcher import fetch_hn_stories  # noqa: E402
+from .dev_fetcher import fetch_devto_articles  # noqa: E402
+from .models import Repo, Snapshot, HNStory, DevArticle, Mention, Topic  # noqa: E402
+from .database import create_db_and_tables, engine  # noqa: E402
 
-# 🚀 DEFINE NOISE SIGNATURES
 BANNED_TOPICS = {
-    "list",
-    "lists",
-    "books",
-    "resource",
-    "resources",
-    "awesome",
-    "curriculum",
-    "roadmap",
-    "interview",
-    "careers",
+    "list", "lists", "books", "resource", "resources",
+    "awesome", "curriculum", "roadmap", "interview", "careers",
 }
 BANNED_DESC_KEYWORDS = [
-    "awesome list",
-    "curated list",
-    "collection of",
-    "list of free",
-    "curriculum",
+    "awesome list", "curated list", "collection of", "list of free", "curriculum",
 ]
 
+HN_WEIGHT = 50
+DEV_WEIGHT = 30
+RECENCY_BONUS = 10
+RECENCY_DAYS = 7
 
-def is_noisy_repository(repo: GitHubRepo) -> bool:
-    """Evaluates if a repository is a static resource or link aggregator."""
-    repo_topics = [topic.lower() for topic in (repo.topics or [])]
-    if any(banned in repo_topics for banned in BANNED_TOPICS):
+
+def is_noisy(name: str, description: str) -> bool:
+    name_lower = name.lower()
+    if any(kw in name_lower for kw in ["awesome", "free-programming", "roadmap", "curriculum", "interview", "public-apis", "books"]):
         return True
-    description = (repo.description or "").lower()
-    if any(keyword in description for keyword in BANNED_DESC_KEYWORDS):
-        return True
-    return False
+    desc = (description or "").lower()
+    return any(kw in desc for kw in BANNED_DESC_KEYWORDS)
+
+
+def compute_trending_score(
+    stars: int,
+    hn_mentions: int,
+    dev_mentions: int,
+    first_seen_at: datetime,
+) -> float:
+    star_score = math.log1p(stars) * 10
+    mention_score = (hn_mentions * HN_WEIGHT) + (dev_mentions * DEV_WEIGHT)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=RECENCY_DAYS)
+    first_seen = first_seen_at.replace(tzinfo=timezone.utc) if first_seen_at.tzinfo is None else first_seen_at
+    recency = RECENCY_BONUS if first_seen >= cutoff else 0
+    # Mention signal is boosted 3x to surface discussed repos above star-heavy noise
+    return round(star_score + (mention_score * 3) + recency, 2)
 
 
 def run_pipeline():
     print(f"\nRefreshing Trending Snapshots: {time.strftime('%Y-%m-%d %H:%M:%S')}")
-
     create_db_and_tables()
-    session_generator = get_session()
-    session = next(session_generator)
 
-    try:
-        # Fetch fresh, currently trending data
-        github_data = fetch_and_stage_github()
-        hn_data = fetch_and_stage_hn()
-        reddit_data = fetch_and_stage_reddit()
+    github_repos = fetch_github_repos()
+    hn_stories, hn_slug_map = fetch_hn_stories()
+    dev_articles, dev_slug_map = fetch_devto_articles()
 
-        # 1. Wipe old records (Drop-and-Replace)
-        session.exec(delete(GitHubRepo))
-        session.exec(delete(HackerNewsStory))
-        session.exec(delete(RedditPost))
-        session.flush()
+    with Session(engine) as session:
+        try:
+            # ── 1. Upsert repos ──────────────────────────────────────────────
+            repo_id_map: dict[str, int] = {}  # slug → db id
 
-        # 2. Insert clean GitHub repos
-        clean_repos = []
-        for repo in github_data:
-            if is_noisy_repository(repo):
-                continue
-            session.add(repo)
-            clean_repos.append(repo)
+            for repo_data in github_repos:
+                if is_noisy(repo_data.name, repo_data.description or ""):
+                    continue
+                existing = session.exec(
+                    select(Repo).where(Repo.name == repo_data.name)
+                ).first()
 
-        session.flush()
+                if existing:
+                    existing.stars = repo_data.stars
+                    existing.forks = repo_data.forks
+                    existing.description = repo_data.description
+                    existing.language = repo_data.language
+                    existing.updated_at = datetime.utcnow()
+                    session.add(existing)
+                    session.flush()
+                    repo_id_map[existing.name] = existing.id
+                else:
+                    session.add(repo_data)
+                    session.flush()
+                    repo_id_map[repo_data.name] = repo_data.id
 
-        # 3. Insert HN stories with smart linking
-        for story in hn_data:
-            linked_repo_name = None
-            story_title_lower = story.title.lower()
+            # Also insert repos discovered via HN/DEV links not in GitHub fetch
+            all_slugs = set(hn_slug_map.keys()) | set(dev_slug_map.keys())
+            for slug in all_slugs:
+                if slug in repo_id_map:
+                    continue
+                discovered = Repo(
+                    name=slug,
+                    url=f"https://github.com/{slug}",
+                    source="github",
+                )
+                session.add(discovered)
+                session.flush()
+                repo_id_map[slug] = discovered.id
 
-            # Layer 1: Strict URL matching
-            if story.url and "github.com" in story.url:
-                match = re.search(r"github\.com/([^/]+/[^/]+)", story.url)
-                if match:
-                    potential_name = match.group(1).lower()
-                    if any(r.repo_name == potential_name for r in clean_repos):
-                        linked_repo_name = potential_name
+            # ── 2. Record star snapshots ─────────────────────────────────────
+            for slug, repo_id in repo_id_map.items():
+                repo = session.get(Repo, repo_id)
+                if repo:
+                    session.add(Snapshot(repo_id=repo_id, stars=repo.stars))
 
-            # Layer 2: Contextual Name-Drop matching
-            if not linked_repo_name:
-                for repo in clean_repos:
-                    short_name = repo.repo_name.split("/")[-1].lower()
-                    if len(short_name) > 3 and short_name in story_title_lower:
-                        linked_repo_name = repo.repo_name
-                        break
+            # ── 3. Clear stale mentions, HN stories, DEV articles ────────────
+            session.exec(delete(Mention))
+            session.exec(delete(HNStory))
+            session.exec(delete(DevArticle))
+            session.flush()
 
-            story.github_repo_name = linked_repo_name
-            session.add(story)
+            # ── 4. Insert HN stories + build mentions ────────────────────────
+            for story in hn_stories:
+                session.add(story)
+                session.flush()
 
-        # 4. Insert Reddit posts
-        for post in reddit_data:
-            session.add(post)
+            for slug, indices in hn_slug_map.items():
+                repo_id = repo_id_map.get(slug)
+                if not repo_id:
+                    continue
+                for idx in indices:
+                    story = hn_stories[idx]
+                    story.repo_id = repo_id
+                    session.add(story)
+                    session.add(Mention(
+                        repo_id=repo_id,
+                        source="hn",
+                        source_article_id=story.id,
+                        title=story.title,
+                        url=story.url,
+                        score=story.points,
+                        created_at=story.created_at,
+                    ))
 
-        session.flush()
+            # ── 5. Insert DEV articles + build mentions ──────────────────────
+            for article in dev_articles:
+                session.add(article)
+                session.flush()
 
-        # 5. Compute trend_score for each repo
-        for repo in clean_repos:
-            short_name = repo.repo_name.split("/")[-1].lower()
-            language = (repo.language or "").lower()
+            for slug, indices in dev_slug_map.items():
+                repo_id = repo_id_map.get(slug)
+                if not repo_id:
+                    continue
+                for idx in indices:
+                    article = dev_articles[idx]
+                    article.repo_id = repo_id
+                    session.add(article)
+                    session.add(Mention(
+                        repo_id=repo_id,
+                        source="devto",
+                        source_article_id=article.id,
+                        title=article.title,
+                        url=article.url,
+                        score=article.reactions,
+                        created_at=article.published_at,
+                    ))
 
-            star_score = math.log1p(repo.stars) * 10
+            session.flush()
 
-            # HN signal: 50 pts per linked story
-            hn_score = sum(50 for s in hn_data if s.github_repo_name == repo.repo_name)
+            # ── 6. Compute trending scores ───────────────────────────────────
+            all_repos = session.exec(select(Repo)).all()
+            for repo in all_repos:
+                mentions = session.exec(
+                    select(Mention).where(Mention.repo_id == repo.id)
+                ).all()
+                hn_count = sum(1 for m in mentions if m.source == "hn")
+                dev_count = sum(1 for m in mentions if m.source == "devto")
+                repo.trending_score = compute_trending_score(
+                    repo.stars, hn_count, dev_count, repo.first_seen_at
+                )
+                session.add(repo)
 
-            # Reddit signal: 30 pts per post mentioning repo name or language
-            reddit_score = sum(
-                30
-                for p in reddit_data
-                if (len(short_name) > 3 and short_name in p.title.lower())
-                or (len(language) > 1 and language in p.title.lower())
-            )
+            # ── 7. Update topics leaderboard ─────────────────────────────────
+            tag_counts: dict[str, int] = {}
+            for article in dev_articles:
+                for tag in (article.tags or []):
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
-            repo.trend_score = round(star_score + hn_score + reddit_score, 2)
+            for tag, count in tag_counts.items():
+                topic = session.exec(
+                    select(Topic).where(Topic.name == tag)
+                ).first()
+                if topic:
+                    topic.weekly_count = count
+                    topic.total_count += count
+                    topic.updated_at = datetime.utcnow()
+                else:
+                    topic = Topic(name=tag, weekly_count=count, total_count=count)
+                session.add(topic)
 
-        session.commit()
-        print("[Database] Snapshot completely updated.")
+            session.commit()
+            print("[Pipeline] Snapshot complete.")
 
-    except Exception as e:
-        session.rollback()
-        print(f"\n[Database Error] Sync failed: {e}")
-    finally:
-        session.close()
+        except Exception as e:
+            session.rollback()
+            print(f"[Pipeline Error] {e}")
 
 
 if __name__ == "__main__":
-    # 🚀 Run exactly once and exit. No while loops.
     run_pipeline()
