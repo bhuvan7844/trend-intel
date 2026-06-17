@@ -1,9 +1,11 @@
 import re
+import time
 import requests
 from datetime import datetime, timedelta, timezone
 from .models import DevArticle
 
 BASE_URL = "https://dev.to/api/articles"
+ARTICLE_URL = "https://dev.to/api/articles/{}"
 GITHUB_PATTERN = re.compile(r"github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)")
 
 BANNED_TAGS = {
@@ -23,22 +25,18 @@ def extract_github_slug(text: str) -> str | None:
 
 
 def fetch_devto_articles(limit=100) -> tuple[list[DevArticle], dict[str, list]]:
-    """
-    Returns:
-        articles: list of DevArticle objects
-        slug_map: {github_slug: [article_indices]} for fast repo matching
-    """
     print("[DEV.to] Fetching articles...")
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=7)
 
-    params = {"per_page": limit, "top": 7}
     headers = {
         "User-Agent": "trend-intel/1.0",
         "Accept": "application/vnd.forem.api-v1+json",
     }
 
     try:
-        res = requests.get(BASE_URL, headers=headers, params=params, timeout=10)
+        res = requests.get(
+            BASE_URL, headers=headers, params={"per_page": limit, "top": 7}, timeout=10
+        )
         res.raise_for_status()
         raw = res.json()
     except requests.exceptions.RequestException as e:
@@ -70,10 +68,22 @@ def fetch_devto_articles(limit=100) -> tuple[list[DevArticle], dict[str, list]]:
 
         seen.add(devto_id)
 
-        # Scan title + description for GitHub URLs
+        # Layer 1: try title + description first
         slug = extract_github_slug(item.get("title", "")) or extract_github_slug(
             item.get("description", "")
         )
+
+        # Layer 2: fetch full body_markdown if no slug found yet
+        if not slug:
+            try:
+                time.sleep(0.3)
+                detail = requests.get(
+                    ARTICLE_URL.format(devto_id), headers=headers, timeout=10
+                ).json()
+                body = detail.get("body_markdown", "")
+                slug = extract_github_slug(body)
+            except Exception:
+                pass
 
         article = DevArticle(
             devto_id=devto_id,

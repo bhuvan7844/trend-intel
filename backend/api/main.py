@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, Depends, Query, HTTPException
 from sqlmodel import Session, select
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from google import genai
@@ -103,6 +105,43 @@ def search_repos(
         .order_by(Repo.trending_score.desc())
         .limit(20)
     ).all()
+
+
+# ── Recommend similar repos via TF-IDF ──────────────────────────────────────
+@app.get("/recommend/{repo_id}", response_model=List[Repo])
+def recommend_repos(
+    repo_id: int,
+    limit: int = 5,
+    db: Session = Depends(get_db),
+):
+    target = db.get(Repo, repo_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="Repo not found")
+
+    all_repos = db.exec(select(Repo)).all()
+    if len(all_repos) < 2:
+        return []
+
+    # Build corpus: name + description + language for each repo
+    def corpus_text(r: Repo) -> str:
+        return f"{r.name} {r.description or ''} {r.language or ''}"
+
+    corpus = [corpus_text(r) for r in all_repos]
+    target_idx = next((i for i, r in enumerate(all_repos) if r.id == repo_id), None)
+    if target_idx is None:
+        return []
+
+    tfidf = TfidfVectorizer(stop_words="english")
+    matrix = tfidf.fit_transform(corpus)
+    scores = cosine_similarity(matrix[target_idx], matrix).flatten()
+
+    # Get top N similar repos excluding the target itself
+    similar_indices = scores.argsort()[::-1]
+    results = [
+        all_repos[i] for i in similar_indices
+        if all_repos[i].id != repo_id
+    ][:limit]
+    return results
 
 
 # ── Analytics ────────────────────────────────────────────────────────────────

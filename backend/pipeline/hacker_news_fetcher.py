@@ -18,14 +18,14 @@ def extract_github_slug(text: str) -> str | None:
     return slug
 
 
-def fetch_hn_stories(limit=100) -> tuple[list[HNStory], dict[str, list]]:
+def fetch_hn_stories(limit=500) -> tuple[list[HNStory], dict[str, list]]:
     """
     Returns:
         stories: list of HNStory objects
         slug_map: {github_slug: [story_indices]} for fast repo matching
     """
     print("[HN] Fetching stories via Algolia...")
-    cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=48)).timestamp()
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=7)).timestamp()
 
     params = {
         "query": "github",

@@ -6,7 +6,7 @@ from sqlmodel import Session, select, delete
 
 load_dotenv()
 
-from .github_fetcher import fetch_github_repos  # noqa: E402
+from .github_fetcher import fetch_github_repos, fetch_single_repo  # noqa: E402
 from .hacker_news_fetcher import fetch_hn_stories  # noqa: E402
 from .dev_fetcher import fetch_devto_articles  # noqa: E402
 from .models import Repo, Snapshot, HNStory, DevArticle, Mention, Topic  # noqa: E402
@@ -83,19 +83,45 @@ def run_pipeline():
                     session.flush()
                     repo_id_map[repo_data.name] = repo_data.id
 
-            # Also insert repos discovered via HN/DEV links not in GitHub fetch
+            # Fetch real metadata for repos discovered via HN/DEV links
             all_slugs = set(hn_slug_map.keys()) | set(dev_slug_map.keys())
+            fetched_this_run: set[str] = set()  # cache to avoid duplicate API calls
             for slug in all_slugs:
                 if slug in repo_id_map:
                     continue
-                discovered = Repo(
-                    name=slug,
-                    url=f"https://github.com/{slug}",
-                    source="github",
-                )
-                session.add(discovered)
-                session.flush()
-                repo_id_map[slug] = discovered.id
+                if slug in fetched_this_run:
+                    continue
+                fetched_this_run.add(slug)
+
+                # Fetch real metadata from GitHub API
+                repo_data = fetch_single_repo(slug)
+                if repo_data is None:
+                    # Repo not found on GitHub, insert minimal placeholder
+                    repo_data = Repo(
+                        name=slug,
+                        url=f"https://github.com/{slug}",
+                        source="github",
+                    )
+
+                existing = session.exec(
+                    select(Repo).where(Repo.name == slug)
+                ).first()
+                if existing:
+                    if repo_data.stars:
+                        existing.stars = repo_data.stars
+                        existing.forks = repo_data.forks
+                        existing.description = repo_data.description
+                        existing.language = repo_data.language
+                        existing.updated_at = datetime.utcnow()
+                    session.add(existing)
+                    session.flush()
+                    repo_id_map[slug] = existing.id
+                else:
+                    session.add(repo_data)
+                    session.flush()
+                    repo_id_map[slug] = repo_data.id
+
+            print(f"[Pipeline] {len(repo_id_map)} repos in map ({len(fetched_this_run)} discovered via HN/DEV).")
 
             # ── 2. Record star snapshots ─────────────────────────────────────
             for slug, repo_id in repo_id_map.items():
