@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # Added for frontend cross-origin requests
 from sqlmodel import Session, select
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai.errors import APIError
 
+# Corrected runtime file mapping resolution reference
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.append(str(BACKEND_ROOT))
@@ -45,6 +47,16 @@ app = FastAPI(
     title="Developer Trend Intelligence API",
     version="2.0.0",
     lifespan=lifespan,
+)
+
+# ── Enable CORS Middleware ──────────────────────────────────────────────────
+# This allows your Vite/React frontend application to fetch your data cleanly.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins. For production, restrict to your deployed Vercel link.
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows GET, POST, OPTIONS, etc.
+    allow_headers=["*"],
 )
 
 
