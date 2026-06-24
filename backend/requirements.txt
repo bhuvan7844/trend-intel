@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sqlmodel
+python-dotenv
+requests
+apscheduler
+scikit-learn
+google-genai

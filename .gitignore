@@ -2,8 +2,11 @@
 __pycache__/
 *.py[cod]
 .venv/
+.env
 *.env
+.env.txt
 *.sqlite3
+*.db
 .env.local
 
 # Node / Next.js
