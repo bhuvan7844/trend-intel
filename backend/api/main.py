@@ -28,7 +28,8 @@ from pipeline.pipeline_manager import run_pipeline  # noqa: E402
 from pipeline.scheduler import start_scheduler  # noqa: E402
 
 try:
-    ai_client = genai.Client()
+    import os
+    ai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 except Exception as e:
     ai_client = None
     print(f"[Warning] Gemini init failed: {e}")

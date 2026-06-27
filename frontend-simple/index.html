@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrendIntel - Developer Trend Intelligence</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">📊 TrendIntel</h1>
+            <ul class="nav-links">
+                <li><a href="index.html" class="active">Dashboard</a></li>
+                <li><a href="repos.html">GitHub Repos</a></li>
+                <li><a href="hn.html">Hacker News</a></li>
+                <li><a href="articles.html">DEV Articles</a></li>
+                <li><a href="chat.html">AI Chat</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section class="hero">
+            <h2>Developer Trend Intelligence</h2>
+            <p>Real-time insights on trending repositories, stories, and articles</p>
+        </section>
+
+        <div class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <h3>Total Repos</h3>
+                <p class="stat-number" id="totalRepos">...</p>
+            </div>
+            <div class="stat-card">
+                <h3>HN Stories</h3>
+                <p class="stat-number" id="hnStories">...</p>
+            </div>
+            <div class="stat-card">
+                <h3>DEV Articles</h3>
+                <p class="stat-number" id="devArticles">...</p>
+            </div>
+            <div class="stat-card">
+                <h3>Topics Tracked</h3>
+                <p class="stat-number" id="totalTopics">...</p>
+            </div>
+        </div>
+
+        <section class="dashboard-section">
+            <h3>Top Languages</h3>
+            <div id="topLanguages" class="language-list">Loading...</div>
+        </section>
+
+        <section class="dashboard-section">
+            <h3>Top Topics</h3>
+            <div id="topTopics" class="topics-list">Loading...</div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+    <script>
+        // Load dashboard data
+        loadDashboard();
+    </script>
+</body>
+</html>
