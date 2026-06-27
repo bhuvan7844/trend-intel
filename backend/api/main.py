@@ -28,7 +28,8 @@ from pipeline.pipeline_manager import run_pipeline  # noqa: E402
 from pipeline.scheduler import start_scheduler  # noqa: E402
 
 try:
-    ai_client = genai.Client()
+    import os
+    ai_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 except Exception as e:
     ai_client = None
     print(f"[Warning] Gemini init failed: {e}")
@@ -237,6 +238,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if not ai_client:
         raise HTTPException(status_code=500, detail="Gemini client not configured.")
 
+    # Fetch top 10 rows from each table
     repos = db.exec(
         select(Repo).order_by(Repo.trending_score.desc()).limit(10)
     ).all()
@@ -247,6 +249,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         select(DevArticle).order_by(DevArticle.reactions.desc()).limit(10)
     ).all()
 
+    # Format data context
     context = (
         "Developer Trend Intelligence Data:\n"
         f"Top Repos: {[f'{r.name} ({r.language}, score={r.trending_score})' for r in repos]}\n"
@@ -254,13 +257,49 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         f"Top DEV.to Articles: {[f'{a.title} ({a.reactions} reactions)' for a in dev_articles]}"
     )
 
+    # Structured system blueprint to govern model behavior
+    structured_prompt = (
+        "You are an expert Developer Trend Intelligence Assistant.\n"
+        "You are provided with real-time database tracking context below.\n\n"
+        "STRICT RESPONSE RULES:\n"
+        "1. If the User Query is a generic greeting (e.g., 'hello', 'hi', 'hey', 'good morning'), "
+        "simply greet them back politely, mention you are ready to analyze developer trends, and ask how you can help. "
+        "DO NOT summarize or list the context data for a simple greeting.\n"
+        "2. If the user asks a specific question or requests analysis, evaluate the context data below and "
+        "provide a clean, concise, scannable answer.\n"
+        "3. Never output massive raw list dumps unless explicitly requested.\n\n"
+        "--- START DATABASE CONTEXT ---\n"
+        f"{context}\n"
+        "--- END DATABASE CONTEXT ---\n\n"
+        f"User Query: {request.query}"
+    )
+
     try:
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"{context}\n\nQuestion: {request.query}",
+            contents=structured_prompt,
         )
         return {"query": request.query, "analysis": response.text}
     except APIError as e:
         raise HTTPException(status_code=400, detail=f"Gemini error: {e.message}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+# ... Keep all your existing endpoint code above this line ...
+
+
+# 🏢 BULLETPROOF ROUTING FOR RENDER:
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+# Calculates the exact path to your project root, then steps into frontend-simple
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent / "frontend-simple"
+
+@app.get("/")
+async def serve_index():
+    # Forcefully serves index.html directly from the frontend-simple folder
+    return FileResponse(str(ROOT_DIR / "index.html"))
+
+# Serves your supporting assets like app.js and style.css from frontend-simple
+app.mount("/", StaticFiles(directory=str(ROOT_DIR)), name="static")

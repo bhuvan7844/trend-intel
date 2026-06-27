@@ -1,0 +1,253 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    background: #0a0a0b;
+    color: #e4e4e7;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+/* Navigation */
+.navbar {
+    background: #18181b;
+    border-bottom: 1px solid #27272a;
+    padding: 1rem 0;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.navbar .container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.logo {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #fbbf24;
+}
+
+.nav-links {
+    display: flex;
+    list-style: none;
+    gap: 2rem;
+}
+
+.nav-links a {
+    color: #a1a1aa;
+    text-decoration: none;
+    transition: color 0.3s;
+    font-weight: 500;
+}
+
+.nav-links a:hover,
+.nav-links a.active {
+    color: #fbbf24;
+}
+
+/* Hero Section */
+.hero {
+    text-align: center;
+    padding: 3rem 0;
+}
+
+.hero h2 {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+    color: #fbbf24;
+}
+
+.hero p {
+    font-size: 1.2rem;
+    color: #a1a1aa;
+}
+
+/* Page Header */
+.page-header {
+    padding: 2rem 0 1rem;
+}
+
+.page-header h2 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: #fbbf24;
+}
+
+/* Search Box */
+.search-box {
+    width: 100%;
+    max-width: 400px;
+    padding: 0.75rem 1rem;
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    color: #e4e4e7;
+    font-size: 1rem;
+    margin-top: 1rem;
+}
+
+.search-box:focus {
+    outline: none;
+    border-color: #fbbf24;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin: 2rem 0;
+}
+
+.stat-card {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+}
+
+.stat-card h3 {
+    color: #a1a1aa;
+    font-size: 0.9rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+}
+
+.stat-number {
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: #fbbf24;
+}
+
+/* Dashboard Sections */
+.dashboard-section {
+    margin: 3rem 0;
+}
+
+.dashboard-section h3 {
+    font-size: 1.5rem;
+    margin-bottom: 1rem;
+    color: #fbbf24;
+}
+
+.language-list, .topics-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.language-item, .topic-item {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.language-item h4, .topic-item h4 {
+    color: #e4e4e7;
+    margin-bottom: 0.5rem;
+}
+
+.language-item p, .topic-item p {
+    color: #a1a1aa;
+    font-size: 0.9rem;
+}
+
+/* Cards Grid */
+.cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 1.5rem;
+    padding: 2rem 0;
+}
+
+.card {
+    background: #18181b;
+    border: 1px solid #27272a;
+    border-radius: 12px;
+    padding: 1.5rem;
+    transition: transform 0.2s, border-color 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-4px);
+    border-color: #fbbf24;
+}
+
+.card h3 {
+    color: #e4e4e7;
+    margin-bottom: 0.75rem;
+    font-size: 1.1rem;
+}
+
+.card p {
+    color: #a1a1aa;
+    margin-bottom: 0.5rem;
+    font-size: 0.95rem;
+}
+
+.card-meta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+}
+
+.badge {
+    background: #27272a;
+    color: #fbbf24;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.card a {
+    color: #fbbf24;
+    text-decoration: none;
+}
+
+.card a:hover {
+    text-decoration: underline;
+}
+
+/* Loading & Error */
+.loading, .error {
+    text-align: center;
+    padding: 3rem;
+    color: #a1a1aa;
+    font-size: 1.1rem;
+}
+
+.error {
+    color: #ef4444;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .nav-links {
+        gap: 1rem;
+        font-size: 0.9rem;
+    }
+    
+    .hero h2 {
+        font-size: 1.8rem;
+    }
+    
+    .cards-grid {
+        grid-template-columns: 1fr;
+    }
+}

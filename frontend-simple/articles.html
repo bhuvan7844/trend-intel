@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DEV Articles - TrendIntel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">📊 TrendIntel</h1>
+            <ul class="nav-links">
+                <li><a href="index.html">Dashboard</a></li>
+                <li><a href="repos.html">GitHub Repos</a></li>
+                <li><a href="hn.html">Hacker News</a></li>
+                <li><a href="articles.html" class="active">DEV Articles</a></li>
+                <li><a href="chat.html">AI Chat</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-header">
+            <h2>✍️ DEV.to Articles</h2>
+            <input type="text" id="searchBox" class="search-box" placeholder="Search articles...">
+        </div>
+
+        <div id="articlesList" class="cards-grid">
+            <p class="loading">Loading articles...</p>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+    <script>
+        loadArticles();
+        
+        // Search functionality
+        document.getElementById('searchBox').addEventListener('input', (e) => {
+            filterArticles(e.target.value);
+        });
+    </script>
+</body>
+</html>
