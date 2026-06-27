@@ -238,6 +238,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if not ai_client:
         raise HTTPException(status_code=500, detail="Gemini client not configured.")
 
+    # Fetch top 10 rows from each table
     repos = db.exec(
         select(Repo).order_by(Repo.trending_score.desc()).limit(10)
     ).all()
@@ -248,6 +249,7 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         select(DevArticle).order_by(DevArticle.reactions.desc()).limit(10)
     ).all()
 
+    # Format data context
     context = (
         "Developer Trend Intelligence Data:\n"
         f"Top Repos: {[f'{r.name} ({r.language}, score={r.trending_score})' for r in repos]}\n"
@@ -255,13 +257,35 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         f"Top DEV.to Articles: {[f'{a.title} ({a.reactions} reactions)' for a in dev_articles]}"
     )
 
+    # Structured system blueprint to govern model behavior
+    structured_prompt = (
+        "You are an expert Developer Trend Intelligence Assistant.\n"
+        "You are provided with real-time database tracking context below.\n\n"
+        "STRICT RESPONSE RULES:\n"
+        "1. If the User Query is a generic greeting (e.g., 'hello', 'hi', 'hey', 'good morning'), "
+        "simply greet them back politely, mention you are ready to analyze developer trends, and ask how you can help. "
+        "DO NOT summarize or list the context data for a simple greeting.\n"
+        "2. If the user asks a specific question or requests analysis, evaluate the context data below and "
+        "provide a clean, concise, scannable answer.\n"
+        "3. Never output massive raw list dumps unless explicitly requested.\n\n"
+        "--- START DATABASE CONTEXT ---\n"
+        f"{context}\n"
+        "--- END DATABASE CONTEXT ---\n\n"
+        f"User Query: {request.query}"
+    )
+
     try:
         response = ai_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"{context}\n\nQuestion: {request.query}",
+            contents=structured_prompt,
         )
         return {"query": request.query, "analysis": response.text}
     except APIError as e:
         raise HTTPException(status_code=400, detail=f"Gemini error: {e.message}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+from fastapi.staticfiles import StaticFiles
+
+# This makes FastAPI look at your root directory and automatically serve index.html
+app.mount("/", StaticFiles(directory=".", html=True), name="static")
