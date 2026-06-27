@@ -288,17 +288,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
 # ... Keep all your existing endpoint code above this line ...
 
 
+# 🏢 BULLETPROOF ROUTING FOR RENDER:
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-# Calculates the exact path to your project root folder, no matter where Render runs it
-ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+# Calculates the exact path to your project root, then steps into frontend-simple
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent / "frontend-simple"
 
 @app.get("/")
 async def serve_index():
-    # Forcefully serves your index.html directly at the primary URL
+    # Forcefully serves index.html directly from the frontend-simple folder
     return FileResponse(str(ROOT_DIR / "index.html"))
 
-# Serves your supporting assets like app.js and style.css
+# Serves your supporting assets like app.js and style.css from frontend-simple
 app.mount("/", StaticFiles(directory=str(ROOT_DIR)), name="static")
