@@ -285,7 +285,20 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
-from fastapi.staticfiles import StaticFiles
+# ... Keep all your existing endpoint code above this line ...
 
-# This makes FastAPI look at your root directory and automatically serve index.html
-app.mount("/", StaticFiles(directory=".", html=True), name="static")
+
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+# Calculates the exact path to your project root folder, no matter where Render runs it
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+
+@app.get("/")
+async def serve_index():
+    # Forcefully serves your index.html directly at the primary URL
+    return FileResponse(str(ROOT_DIR / "index.html"))
+
+# Serves your supporting assets like app.js and style.css
+app.mount("/", StaticFiles(directory=str(ROOT_DIR)), name="static")
